@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.0.12 (TBA)
+
+* `Pow.Store.Backend.MnesiaCache` now handles distributed cluster
+
 ## v1.0.11 (2019-06-13)
 
 * Fixed bug in router filters with Phoenix 1.4.7
