@@ -77,9 +77,14 @@ MIX_ENV=dev PORT=4000 elixir --sname a -S mix phx.server
 ```
 (The `--sname` option passed to elixir/erlang assigns the `sname` (short name) of `a` to the server, such that the full name is `a@hostname`.)
 
-Then, _before_ launching the second instance, specify a different storage location:
+Then, _before_ launching the second instance, specify a different storage location in `/config/dev.exs`; however, to prevent code reloading from confusing the two runtime instances of your app, you need to change it to false:
 
 ```elixir
+config :gjwapp, GjwappWeb.Endpoint,
+  # ...
+  code_reloader: false,  # remember to change this back!
+  # ...
+
 config :mnesia, dir: to_charlist(File.cwd!) ++ '/priv/mnesia_2'
 
 ```
