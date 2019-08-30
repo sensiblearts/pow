@@ -9,8 +9,9 @@ Connecting elixir nodes is straight forward, but the details can be complicated 
 This guide will first describe installation and configuration of Pow to use the Mnesia cache store. Then, a few use cases are described, along with considerations relative to Pow User sessions, in increasing order of complexity:
 
 1. Simple loop to connect a pre-configured set of servers
-2. Use of the libcluster `Cluster.Strategy.Epmd` strategy to connect a pre-configured set of servers
-3. Use of the libcluster `Cluster.Strategy.ErlangHosts` strategy to read the list of servers from the `.hosts.erlang` file and connect then dynamically. 
+2. Use of the libcluster `Cluster.Strategy.Gossip` where all servers broadcast UDP messages over the same port to find one another; hence, no need to specify servers or the erlang short names
+3. Use of the libcluster `Cluster.Strategy.ErlangHosts` strategy to read the list of server IPs or hostnames from the `.hosts.erlang` file and connect then dynamically; then, the servers automatically discover the erlang short names
+4. Use of the libcluster `Cluster.Strategy.Epmd` strategy to connect a pre-configured set of servers and erlang node short names
 
 ## Configuring Pow to use Mnesia: Compile-time Configuration
 
@@ -178,11 +179,15 @@ Now, if you run the above servers as backends with e.g., HAProxy or nginx as a r
 - Node `b` accepts the session credentials that were created if sign-in occurred on node `a`, and vice versa
 - you can kill and restart `a` or `b` without any downtime from the perspective of the browser session: When you restart a killed server Mnesia will re-sync the cached schema so that each backend node again has a copy of the current cache.
 
-## Example: Using libcluster's Cluster.Strategy.Epmd strategy to connect a pre-configured set of servers
+## Example: Using libcluster's Cluster.Strategy.Gossip strategy to discover servers dynamically
 
 TODO
 
 ## Example: Use of the libcluster's Cluster.Strategy.ErlangHosts to connect servers specified in the .hosts.erlang file 
+
+TODO
+
+## Example: Using libcluster's Cluster.Strategy.Epmd strategy to connect a pre-configured set of servers
 
 TODO
 
