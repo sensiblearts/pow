@@ -8,10 +8,10 @@ Connecting elixir nodes is straight forward, but the details can be complicated 
 
 This guide will first describe installation and configuration of Pow to use the Mnesia cache store. Then, a few use cases are described, along with considerations relative to Pow User sessions, in increasing order of complexity:
 
-1. Simple loop to connect a pre-configured set of servers
-2. Use of the libcluster `Cluster.Strategy.Gossip` where all servers broadcast UDP messages over the same port to find one another; hence, no need to specify servers or the erlang short names
-3. Use of the libcluster `Cluster.Strategy.ErlangHosts` strategy to read the list of server IPs or hostnames from the `.hosts.erlang` file and connect then dynamically; then, the servers automatically discover the erlang short names
-4. Use of the libcluster `Cluster.Strategy.Epmd` strategy to connect a pre-configured set of servers and erlang node short names
+1. Use of the libcluster `Cluster.Strategy.Gossip` where all nodes broadcast UDP messages over the same port to find one another; hence, no need to specify host IPs or the erlang short names
+2. Use of the libcluster `Cluster.Strategy.Epmd` strategy to connect a pre-configured set of server nodes that are specified (in the elixir code) by fully qualified hostnames (e.g., "mynode@127.0.0.1") 
+3. Use of the libcluster `Cluster.Strategy.ErlangHosts` strategy to read the list of server IPs or hostnames from the `.hosts.erlang` file and connect then dynamically; then, the servers automatically discover the erlang short names for each host
+4. _Instead of using libcluster_, iterate over an elixir list to connect a pre-configured set of servers
 
 ## Configuring Pow to use Mnesia: Compile-time Configuration
 
@@ -106,10 +106,150 @@ If you need to use `Unsplit` then you need to add it to your application `start/
 
 A common example would be a job queue, where a potential solution to prevent data loss is to simply keep the job queue table on only one server instead of replicating it among all nodes. If you do this, then when a network partition occurs, the job queue table can be excluded from the tables to be flushed (and restored) during healing by setting `:flush_tables` to `false` (the default). This way, the `Unsplit` module can self-heal without affecting the job queue table.
 
+## Using **libcluster**
 
-## Example: Connecting a hard-coded set of server nodes
+[libcluster](https://github.com/bitwalker/libcluster) offers:
 
-Normally you would not hard-code the identify of the participating nodes, but this is easy to understand. So, in `application.ex` we will add code that will, when the app starts at run-time:
+- Automatic cluster formation/healing
+- Choice of multiple clustering strategies out of the box:
+  - Standard Distributed Erlang facilities (e.g. `epmd`, `.hosts.erlang`), which supports IP-based or DNS-based names
+  - Multicast UDP gossip, using a configurable port/multicast address,
+  - Kubernetes via its metadata API using via a configurable label selector and
+    node basename; or alternatively, using DNS.
+  - Rancher, via its [metadata API][rancher-api]
+- Easy to provide your own custom clustering strategies for your specific environment.
+- Easy to use provide your own distribution plumbing (i.e. something other than
+  Distributed Erlang), by implementing a small set of callbacks. This allows
+  `libcluster` to support projects like
+  [Partisan](https://github.com/lasp-lang/partisan).
+
+  **Installation**:
+
+  ```elixir
+  defp deps do
+    [{:libcluster, "~> MAJ.MIN"}]
+  end
+  ```
+
+  You can determine the latest version by running `mix hex.info libcluster` in
+  your shell, or by going to the `libcluster` [page on Hex.pm](https://hex.pm/packages/libcluster).
+
+  See: [https://github.com/bitwalker/libcluster](https://github.com/bitwalker/libcluster)
+
+## Example: Using **libcluster**'s `Cluster.Strategy.Gossip` strategy to discover servers dynamically
+
+// Configure for Gossip:
+
+```elixir
+   topologies = [
+      gjwapp: [
+        strategy: Cluster.Strategy.Gossip
+      ]
+    ]
+```
+
+// And start servers like:
+
+// first edit
+
+```elixir
+config :mnesia, dir: '/tmp/mnesia'
+```
+// then start a
+
+```elixir
+MIX_ENV=dev PORT=4000 elixir --sname a -S mix phx.server
+```
+
+// then edit
+
+```elixir
+config :mnesia, dir: '/tmp/mnesia2'
+```
+
+// then start b
+
+```elixir
+MIX_ENV=dev PORT=4002 elixir --sname b -S mix phx.server
+```
+
+Now, if you run the above servers as backends with e.g., HAProxy or nginx as a round-robin load balancer, you will see that:
+- Http requests are routed in a balanced way to the two backends.
+- Node `b` accepts the session credentials that were created if sign-in occurred on node `a`, and vice versa
+- you can kill and restart `a` or `b` without any downtime from the perspective of the browser session: When you restart a killed server Mnesia will re-sync the cached schema so that each backend node again has a copy of the current cache.
+
+## Example: Using **libcluster**'s `Cluster.Strategy.Epmd` strategy to connect a pre-configured set of servers
+
+ topologies = [
+      gjwapp: [
+        strategy: Cluster.Strategy.Epmd,
+        config: [hosts: [:"a@127.0.0.1", :"b@127.0.0.1"]],
+      ]
+    ]
+
+// but if you try to start a and b as described above, you will get
+
+[error] ** System NOT running to use fully qualified hostnames **
+
+// which tells us that we have to start our servers with --name rather than --sname
+
+// first edit
+
+config :mnesia, dir: '/tmp/mnesia'
+
+// then start a
+
+MIX_ENV=dev PORT=4000 elixir --name a@127.0.0.1 -S mix phx.server
+
+// then edit
+
+config :mnesia, dir: '/tmp/mnesia2'
+
+// then start b
+
+MIX_ENV=dev PORT=4002 elixir --name b@127.0.0.1 -S mix phx.server
+
+Again, if run behind a load balancer such as HAProxy, node `b` accepts the session credentials that were created if sign-in occurred on node `a`, and vice versa, and you can kill and restart `a` or `b` without any downtime from the perspective of the browser session.
+
+## Example: Use of the **libcluster**'s `Cluster.Strategy.ErlangHosts` to connect servers specified in the .hosts.erlang file 
+
+To use libcluster's `ErlangHosts` strategy, we first need to create a file in the root working directory of our server(s) to specify the hosts (or IP addresses); because in this example we are testing both nodes on a single dev mode computer, this `.hosts.erlang` file has a single line:
+
+```erlang
+'127.0.0.1'.
+```
+
+Then, in `Application.ex` we configure libcluster as:
+
+```elixir
+    topologies = [
+      gjwapp: [
+        strategy: Cluster.Strategy.ErlangHosts
+      ]
+    ]
+```
+
+Then, simply start the servers as in the Epmd example (and remembering to change the write directory for the mnesia files; see above), i.e.,: 
+
+```elixir
+MIX_ENV=dev PORT=4000 elixir --name a@127.0.0.1 -S mix phx.server
+```
+
+and
+
+```elixir
+MIX_ENV=dev PORT=4002 elixir --name b@127.0.0.1 -S mix phx.server
+```
+
+Because the `.hosts.erlang` file contains the IP to query for nodes, `libcluster` will find both node `a` and node `b`. 
+
+Once again, if run behind a load balancer such as HAProxy, node `b` accepts the session credentials that were created if sign-in occurred on node `a`, and vice versa, and you can kill and restart `a` or `b` without any downtime from the perspective of the browser session.
+
+
+## Example: _Without using libcluster_, connecting a hard-coded set of server nodes
+
+This is a short example to show how to connect nodes manually.
+So, in `application.ex` we will add code that will, when the app starts at run-time:
 
 1. connect elixir nodes `a` and `b`
 2. add the Mnesia cache to your supervision tree
@@ -174,23 +314,6 @@ The above config and commands will result in the following:
 | b  | b@hostname  | 4002  | ./priv/mnesia_2  |
 
 
-Now, if you run the above servers as backends with e.g., HAProxy or nginx as a round-robin load balancer, you will see that:
-- Http requests are routed in a balanced way to the two backends.
-- Node `b` accepts the session credentials that were created if sign-in occurred on node `a`, and vice versa
-- you can kill and restart `a` or `b` without any downtime from the perspective of the browser session: When you restart a killed server Mnesia will re-sync the cached schema so that each backend node again has a copy of the current cache.
-
-## Example: Using libcluster's Cluster.Strategy.Gossip strategy to discover servers dynamically
-
-TODO
-
-## Example: Use of the libcluster's Cluster.Strategy.ErlangHosts to connect servers specified in the .hosts.erlang file 
-
-TODO
-
-## Example: Using libcluster's Cluster.Strategy.Epmd strategy to connect a pre-configured set of servers
-
-TODO
-
 ## Test module
 
 ```elixir
@@ -201,3 +324,6 @@ TODO
 ## Further reading
 
 TODO
+
+https://github.com/bitwalker/libcluster
+
